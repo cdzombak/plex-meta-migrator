@@ -1,0 +1,9 @@
+**/*.py
+**/*.sh
+
+venv
+
+Dockerfile*
+LICENSE
+Makefile
+requirements.txt
