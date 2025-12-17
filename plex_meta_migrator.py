@@ -18,6 +18,7 @@ from plexapi import CONFIG
 from plexapi.exceptions import Unauthorized
 from plexapi.library import LibrarySection
 from plexapi.myplex import MyPlexAccount
+from plexapi.playlist import Playlist
 from plexapi.server import PlexServer
 
 # Version is injected at build time by the Dockerfile
@@ -467,9 +468,153 @@ def prompt_run_mode() -> bool:
             sys.exit(0)
 
 
+# --- Playlist Migration Functions ---
+
+
+def select_playlist(server: PlexServer) -> Playlist:
+    """Allow user to select a playlist from the server."""
+    all_playlists = server.playlists()
+
+    # Filter out smart playlists (they can't be meaningfully migrated)
+    playlists = [p for p in all_playlists if not p.smart]
+
+    if not playlists:
+        print("No regular playlists found on server (smart playlists are not supported).")
+        sys.exit(1)
+
+    print(f"\nAvailable playlists on {server.friendlyName}:")
+    for i, playlist in enumerate(playlists, 1):
+        print(f"  {i}. {playlist.title} ({playlist.playlistType}, {playlist.leafCount} items)")
+
+    while True:
+        try:
+            choice = input("\nSelect a playlist (number): ").strip()
+            idx = int(choice) - 1
+            if 0 <= idx < len(playlists):
+                return playlists[idx]
+            print(f"Please enter a number between 1 and {len(playlists)}")
+        except ValueError:
+            print("Please enter a valid number")
+        except (KeyboardInterrupt, EOFError):
+            print("\nCancelled.")
+            sys.exit(0)
+
+
+def find_matching_playlist_items(
+    playlist: Playlist, dest_section: LibrarySection
+) -> tuple[list[Any], list[Any]]:
+    """Match playlist items to destination library items by filename.
+
+    Returns:
+        Tuple of (matched_items, unmatched_items) where matched_items are
+        destination library items in playlist order.
+    """
+    print(f"\nScanning playlist: {playlist.title} ({playlist.leafCount} items)...")
+    playlist_items = playlist.items()
+
+    print(f"Scanning destination library: {dest_section.title}...")
+    dest_items = dest_section.all()
+
+    # Build lookup dict for destination items: filename -> item
+    dest_lookup: dict[str, Any] = {}
+    for item in dest_items:
+        for filename in get_item_filenames(item):
+            dest_lookup[filename] = item
+
+    # Match playlist items by filename, preserving order
+    matched_items = []
+    unmatched_items = []
+
+    for playlist_item in playlist_items:
+        filenames = get_item_filenames(playlist_item)
+        matched = False
+        for filename in filenames:
+            if filename in dest_lookup:
+                matched_items.append(dest_lookup[filename])
+                matched = True
+                break
+        if not matched:
+            unmatched_items.append(playlist_item)
+
+    return matched_items, unmatched_items
+
+
+def prompt_playlist_title(default_title: str) -> str:
+    """Prompt for destination playlist title with a default value."""
+    print(f"\nDestination playlist title (default: {default_title})")
+    try:
+        title = input("Title (press Enter for default): ").strip()
+        return title if title else default_title
+    except (KeyboardInterrupt, EOFError):
+        print("\nCancelled.")
+        sys.exit(0)
+
+
+def preview_playlist_migration(
+    playlist: Playlist, matched_items: list[Any], unmatched_items: list[Any]
+) -> None:
+    """Preview what playlist would be created (dry run)."""
+    print("\n" + "=" * 60)
+    print("PLAYLIST MIGRATION PREVIEW (DRY RUN)")
+    print("=" * 60)
+
+    print(f"\nSource playlist: {playlist.title}")
+    print(f"Total items: {playlist.leafCount}")
+    print(f"Matched items: {len(matched_items)}")
+    print(f"Unmatched items: {len(unmatched_items)}")
+
+    if matched_items:
+        print("\nItems that would be added to new playlist:")
+        for item in matched_items[:10]:  # Show first 10
+            print(f"  - {get_item_display_name(item)}")
+        if len(matched_items) > 10:
+            print(f"  ... and {len(matched_items) - 10} more")
+
+    if unmatched_items:
+        print("\nWARNING: The following items could not be matched:")
+        for item in unmatched_items[:10]:  # Show first 10
+            print(f"  - {get_item_display_name(item)}")
+        if len(unmatched_items) > 10:
+            print(f"  ... and {len(unmatched_items) - 10} more")
+
+    print("\n" + "-" * 60)
+    print("Summary:")
+    print(f"  {len(matched_items)} of {playlist.leafCount} items would be migrated")
+    if unmatched_items:
+        print(f"  {len(unmatched_items)} items could not be matched (will be skipped)")
+
+
+def perform_playlist_migration(
+    dest_server: PlexServer, title: str, matched_items: list[Any]
+) -> Playlist | None:
+    """Create a new playlist on the destination server with matched items.
+
+    Returns:
+        The created Playlist, or None if no items to add.
+    """
+    print("\n" + "=" * 60)
+    print("PERFORMING PLAYLIST MIGRATION")
+    print("=" * 60)
+
+    if not matched_items:
+        print("\nNo matched items to create playlist.")
+        return None
+
+    print(f"\nCreating playlist '{title}' with {len(matched_items)} items...")
+
+    try:
+        new_playlist = dest_server.createPlaylist(title=title, items=matched_items)
+        print(f"Successfully created playlist: {new_playlist.title}")
+        print(f"  Items: {new_playlist.leafCount}")
+        return new_playlist
+    except Exception as e:
+        print(f"ERROR creating playlist: {e}")
+        return None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Find matching media between Plex libraries for metadata migration",
+        description="Migrate metadata or playlists between Plex libraries",
         epilog="""
 Authentication methods (in order of precedence):
   1. Direct: --source-url/--source-token and --dest-url/--dest-token
@@ -485,6 +630,13 @@ servers interactively from your available servers.
 
     parser.add_argument(
         "--version", "-v", action="version", version=f"%(prog)s {VERSION}"
+    )
+
+    # Mode selection
+    parser.add_argument(
+        "--playlist",
+        action="store_true",
+        help="Migrate a playlist instead of metadata",
     )
 
     # Direct connection options for source
@@ -531,24 +683,48 @@ servers interactively from your available servers.
 
         print(f"Connected to destination: {dest_server.friendlyName}")
 
-        # Select libraries
-        source_library = select_library(
-            source_server, f"Select SOURCE library from {source_server.friendlyName}:"
-        )
-        dest_library = select_library(
-            dest_server, f"Select DESTINATION library from {dest_server.friendlyName}:"
-        )
+        if args.playlist:
+            # Playlist migration mode
+            dest_library = select_library(
+                dest_server,
+                f"Select DESTINATION library from {dest_server.friendlyName}:",
+            )
+            playlist = select_playlist(source_server)
+            matched_items, unmatched_items = find_matching_playlist_items(
+                playlist, dest_library
+            )
 
-        # Find matching items
-        matches = find_matching_items(source_library, dest_library)
+            # Ask for destination playlist title
+            dest_title = prompt_playlist_title(playlist.title)
 
-        # Ask user for run mode
-        real_run = prompt_run_mode()
+            # Ask user for run mode
+            real_run = prompt_run_mode()
 
-        if real_run:
-            perform_metadata_migration(matches)
+            if real_run:
+                perform_playlist_migration(dest_server, dest_title, matched_items)
+            else:
+                preview_playlist_migration(playlist, matched_items, unmatched_items)
         else:
-            preview_metadata_migration(matches)
+            # Metadata migration mode (default)
+            source_library = select_library(
+                source_server,
+                f"Select SOURCE library from {source_server.friendlyName}:",
+            )
+            dest_library = select_library(
+                dest_server,
+                f"Select DESTINATION library from {dest_server.friendlyName}:",
+            )
+
+            # Find matching items
+            matches = find_matching_items(source_library, dest_library)
+
+            # Ask user for run mode
+            real_run = prompt_run_mode()
+
+            if real_run:
+                perform_metadata_migration(matches)
+            else:
+                preview_metadata_migration(matches)
 
     except Exception as e:
         print(f"Error: {e}")

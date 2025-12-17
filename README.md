@@ -1,12 +1,20 @@
 # plex-meta-migrator
 
-Migrate locked metadata fields from one Plex library to another. This tool finds matching media items between a source and destination library (by filename) and copies locked metadata fields from source to destination.
+Migrate locked metadata fields or playlists from one Plex library to another. This tool finds matching media items between a source and destination library (by filename) and copies locked metadata fields or recreates playlists on the destination.
 
-Supported metadata includes:
+## Features
+
+### Metadata Migration (default)
+
+Copies locked metadata fields from source to destination items, including:
 
 - Simple fields: title, summary, tagline, sort title, studio, content rating, etc.
 - Tag fields: collections, genres, directors, writers, labels, moods, styles, etc.
 - Images: poster (thumb) and background art
+
+### Playlist Migration (`--playlist`)
+
+Copies a playlist from one server to another by matching playlist items to the destination library by filename. Smart playlists are not supported.
 
 ## Usage (Docker)
 
@@ -84,6 +92,7 @@ Set the `PLEX_CREDS_FILE` environment variable to change the credentials file lo
 
 ```
 -v, --version          Show version and exit
+--playlist             Migrate a playlist instead of metadata
 
 Source server (direct connection):
   --source-url URL       Source Plex server URL
