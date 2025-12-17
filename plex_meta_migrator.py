@@ -6,9 +6,6 @@ Connects to source and destination Plex servers, finds matching media items,
 and will support copying locked metadata fields between them.
 """
 
-# Version is injected at build time by the Dockerfile
-VERSION = "<dev>"
-
 import argparse
 import json
 import os
@@ -19,9 +16,12 @@ from typing import Any
 
 from plexapi import CONFIG
 from plexapi.exceptions import Unauthorized
+from plexapi.library import LibrarySection
 from plexapi.myplex import MyPlexAccount
 from plexapi.server import PlexServer
-from plexapi.library import LibrarySection
+
+# Version is injected at build time by the Dockerfile
+VERSION = "<dev>"
 
 # Credentials file path - can be overridden via environment variable
 CREDS_FILE = Path(
@@ -426,7 +426,7 @@ def perform_metadata_migration(
             items_migrated += 1
 
     print("\n" + "-" * 60)
-    print(f"Migration complete:")
+    print("Migration complete:")
     print(f"  {items_migrated} items migrated successfully")
     print(f"  {fields_copied} fields copied")
     if errors:
