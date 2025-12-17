@@ -479,12 +479,16 @@ def select_playlist(server: PlexServer) -> Playlist:
     playlists = [p for p in all_playlists if not p.smart]
 
     if not playlists:
-        print("No regular playlists found on server (smart playlists are not supported).")
+        print(
+            "No regular playlists found on server (smart playlists are not supported)."
+        )
         sys.exit(1)
 
     print(f"\nAvailable playlists on {server.friendlyName}:")
     for i, playlist in enumerate(playlists, 1):
-        print(f"  {i}. {playlist.title} ({playlist.playlistType}, {playlist.leafCount} items)")
+        print(
+            f"  {i}. {playlist.title} ({playlist.playlistType}, {playlist.leafCount} items)"
+        )
 
     while True:
         try:
